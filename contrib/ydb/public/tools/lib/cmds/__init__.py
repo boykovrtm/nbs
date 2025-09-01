@@ -19,6 +19,7 @@ from ydb.tests.library.common.types import Erasure
 from ydb.tests.library.harness.daemon import Daemon
 from ydb.tests.library.harness.util import LogLevels
 from ydb.tests.library.harness.kikimr_port_allocator import KikimrFixedPortAllocator
+from library.python import resource
 from library.python.testing.recipe import set_env
 
 
@@ -54,6 +55,15 @@ def ensure_path_exists(path):
     if not os.path.isdir(path):
         os.makedirs(path)
     return path
+
+
+def dynamic_storage_pools(args):
+    dynamic_storage_pools = resource.find('dynamic_storage_pools')
+    if dynamic_storage_pools is not None:
+        return json.loads(dynamic_storage_pools)
+    if args.dynamic_storage_pools is None:
+        return None
+    return json.loads(args.dynamic_storage_pools)
 
 
 def parse_erasure(args):
@@ -138,6 +148,13 @@ def random_string():
     return ''.join([random.choice(string.ascii_lowercase) for _ in range(6)])
 
 
+def set_guest_index(path: str, index: int):
+    if index == None:
+        return path
+    else:
+        return "{}__{}".format(path, index)
+
+
 class Recipe(object):
     def __init__(self, arguments):
         self.recipe_metafile = 'ydb_recipe.json'
@@ -185,9 +202,9 @@ class Recipe(object):
             # NOTE(gvit): that is possible in case when yatest infra is not available
             pass
 
-    def write_metafile(self, content):
-        self.setenv(self.recipe_metafile_var, self.metafile_path())
-        return self.write(self.metafile_path(), json.dumps(content))
+    def write_metafile(self, content, index):
+        self.setenv(set_guest_index(self.recipe_metafile_var, index), set_guest_index(self.metafile_path(), index))
+        return self.write(set_guest_index(self.metafile_path(), index), json.dumps(content))
 
     def write_endpoint(self, endpoint):
         self.setenv('YDB_ENDPOINT', endpoint)
@@ -216,8 +233,8 @@ class Recipe(object):
     def write_mon_port(self, mon_port):
         self.setenv('YDB_MON_PORT', str(mon_port))
 
-    def read_metafile(self):
-        return json.loads(self.read(self.metafile_path()))
+    def read_metafile(self, index=None):
+        return json.loads(self.read(set_guest_index(self.metafile_path(), index )))
 
     def generate_data_path(self):
         if self.data_path is not None:
@@ -362,6 +379,9 @@ def deploy(arguments):
         for service in services:
             enabled_grpc_services.append(service)
 
+    if dynamic_storage_pools(arguments):
+        optionals.update({'dynamic_storage_pools': dynamic_storage_pools(arguments)})
+
     configuration = KikimrConfigGenerator(
         erasure=parse_erasure(arguments),
         binary_paths=[arguments.ydb_binary_path] if arguments.ydb_binary_path else None,
@@ -390,7 +410,7 @@ def deploy(arguments):
     cluster = KiKiMR(configuration)
     cluster.start()
 
-    info = {'nodes': {}}
+    info = {'nodes': {}, 'cluster': {}}
     endpoints = []
     mon_port = None
     for node_id, node in cluster.nodes.items():
@@ -415,6 +435,10 @@ def deploy(arguments):
 
         endpoints.append("localhost:%d" % node.grpc_port)
 
+    info['clusters'] = {
+        'domains_txt': configuration.domains_txt,
+        'binary_path': configuration.binary_path
+    }
     endpoint = endpoints[0]
     database = cluster.domain_name
     recipe.write_metafile(info)
@@ -430,7 +454,7 @@ def deploy(arguments):
 
 def _stop_instances(arguments):
     recipe = Recipe(arguments)
-    if not os.path.exists(recipe.metafile_path()):
+    if not os.path.exists(set_guest_index(recipe.metafile_path(), arguments.guest_index)):
         return
     try:
         info = recipe.read_metafile()
@@ -533,6 +557,8 @@ def produce_arguments(args):
     parser.add_argument("--base-port-offset", action="store", type=int, default=0)
     parser.add_argument("--pq-client-service-type", action='append', default=[])
     parser.add_argument("--enable-pqcd", action='store_true', default=False)
+    parser.add_argument("--guest-index", action='store', default=None)
+    parser.add_argument("--dynamic_storage_pools", action='store', default=None)
     parsed, _ = parser.parse_known_args(args)
     arguments = EmptyArguments()
     arguments.suppress_version_check = parsed.suppress_version_check
@@ -546,6 +572,10 @@ def produce_arguments(args):
     arguments.enable_pq = parsed.enable_pq
     arguments.pq_client_service_types = parsed.pq_client_service_type
     arguments.enable_pqcd = parsed.enable_pqcd
+    if parsed.guest_index == "$GUEST_INDEX":
+        arguments.guest_index = None
+    else:
+        arguments.guest_index = parsed.guest_index
     return arguments
 
 

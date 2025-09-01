@@ -57,7 +57,7 @@ def start(argv):
     clusters = []
     nbs_servers = []
 
-    nbs_instances_count = int(args.nbs_instances_count)
+    nbs_instances_count = args.nbs_instances_count
     set_env("CLUSTERS_COUNT", str(nbs_instances_count))
 
     logger.info("tring to start {} instances".format(nbs_instances_count))
