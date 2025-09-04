@@ -1,6 +1,8 @@
 import argparse
-import os
+import grpc
 import json
+import os
+import time
 import logging
 
 from library.python.testing.recipe import declare_recipe, set_env
@@ -11,11 +13,46 @@ from cloud.blockstore.config.discovery_pb2 import TDiscoveryServiceConfig
 from cloud.blockstore.tests.python.lib.nbs_runner import LocalNbs
 from cloud.blockstore.tests.python.lib.test_base import thread_count, wait_for_nbs_server, recipe_set_env
 
+import contrib.ydb.core.protos.grpc_pb2_grpc as grpc_server
+from cloud.storage.core.tests.common import (
+    append_recipe_err_files,
+    process_recipe_err_files,
+)
+
 import yatest.common as yatest_common
 
 PID_FILE_NAME = "local_kikimr_nbs_server_recipe.pid"
+ERR_LOG_FILE_NAMES_FILE = "local_kikimr_nbs_server_recipe.err_log_files"
 pm = yatest_common.network.PortManager()
 logger = logging.getLogger(__name__)
+
+
+class KikimrCluster(object):
+    def __init__(self, server, port, retry_count=10):
+        self.server = server
+        self.port = port
+        self.__retry_count = retry_count
+        self.__retry_sleep_seconds = 10
+        self._options = [
+            ('grpc.max_receive_message_length', 64 * 10 ** 6),
+            ('grpc.max_send_message_length', 64 * 10 ** 6)
+        ]
+        self._channel = grpc.insecure_channel("%s:%s" % (self.server, self.port), options=self._options)
+        self._stub = grpc_server.TGRpcServerStub(self._channel)
+
+    def invoke(self, request, method):
+        retry = self.__retry_count
+        while True:
+            try:
+                callee = getattr(self._stub, method)
+                return callee(request)
+            except (RuntimeError, grpc.RpcError):
+                retry -= 1
+
+                if not retry:
+                    raise
+
+                time.sleep(self.__retry_sleep_seconds)
 
 
 def _start_instans(args, index):
@@ -54,6 +91,7 @@ def _start_instans(args, index):
     with open(os.getenv('YDB_RECIPE_METAFILE'), 'r') as f:
         ydb_meta = json.loads(f.read())
 
+    kikimr_host = ydb_meta['nodes'][0]['host']
     kikimr_port = ydb_meta['nodes'][0]['grpc_port']
     kikimr_binary_path = ydb_meta['clusters']['binary_path']
     domains_txt = ydb_meta['clusters']['domains_txt']
@@ -73,12 +111,19 @@ def _start_instans(args, index):
         config_sub_folder="nbs_configs_{}".format(index)
     )
 
-    kikimr = (
-
+    kikimr = KikimrCluster(
+        kikimr_host,
+        kikimr_port
     )
 
-    nbs.setup_cms()
+    nbs.setup_cms(kikimr)
+    nbs.start()
 
+    append_recipe_err_files(ERR_LOG_FILE_NAMES_FILE, nbs.stderr_file_name)
+
+    recipe_set_env("LOCAL_KIKIMR_KIKIMR_SERVER_PORT", str(kikimr_port), nbs_index)
+    recipe_set_env("LOCAL_KIKIMR_SECURE_NBS_SERVER_PORT", str(nbs.nbs_secure_port), nbs_index)
+    recipe_set_env("LOCAL_KIKIMR_INSECURE_NBS_SERVER_PORT", str(nbs.nbs_port), nbs_index)
 
 
 def start(argv):

@@ -437,7 +437,8 @@ def deploy(arguments):
 
     info['clusters'] = {
         'domains_txt': configuration.domains_txt,
-        'binary_path': configuration.binary_path
+        'binary_path': configuration.binary_path,
+        'domain_name': configuration.domain_name
     }
     endpoint = endpoints[0]
     database = cluster.domain_name
