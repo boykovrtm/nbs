@@ -24,7 +24,8 @@ TEST_SRCS(
     test.py
 )
 
-INCLUDE(${ARCADIA_ROOT}/cloud/blockstore/tests/recipes/local-kikimr/local-kikimr.inc)
+INCLUDE(${ARCADIA_ROOT}/cloud/blockstore/tests/recipes/ydb/ydb.inc)
+INCLUDE(${ARCADIA_ROOT}/cloud/blockstore/tests/recipes/nbs/nbs.inc)
 INCLUDE(${ARCADIA_ROOT}/cloud/blockstore/tests/recipes/endpoint/vhost-endpoint.inc)
 INCLUDE(${ARCADIA_ROOT}/cloud/blockstore/tests/recipes/qemu.inc)
 

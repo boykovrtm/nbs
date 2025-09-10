@@ -12,13 +12,13 @@ from six.moves.urllib.parse import urlparse
 
 import yatest
 
-from yql.essentials.providers.common.proto.gateways_config_pb2 import TGenericConnectorConfig
-from ydb.tests.library.harness.kikimr_runner import KiKiMR
-from ydb.tests.library.harness.kikimr_config import KikimrConfigGenerator
-from ydb.tests.library.common.types import Erasure
-from ydb.tests.library.harness.daemon import Daemon
-from ydb.tests.library.harness.util import LogLevels
-from ydb.tests.library.harness.kikimr_port_allocator import KikimrFixedPortAllocator
+from contrib.ydb.library.yql.providers.common.proto.gateways_config_pb2 import TGenericConnectorConfig
+from contrib.ydb.tests.library.harness.kikimr_runner import KiKiMR
+from contrib.ydb.tests.library.harness.kikimr_config import KikimrConfigGenerator
+from contrib.ydb.tests.library.common.types import Erasure
+from contrib.ydb.tests.library.harness.daemon import Daemon
+from contrib.ydb.tests.library.harness.util import LogLevels
+from contrib.ydb.tests.library.harness.kikimr_port_allocator import KikimrFixedPortAllocator
 from library.python import resource
 from library.python.testing.recipe import set_env
 
@@ -40,6 +40,7 @@ class EmptyArguments(object):
         self.dont_use_log_files = False
         self.enabled_feature_flags = []
         self.enabled_grpc_services = []
+        self.dynamic_storage_pools = None
 
 
 def _get_build_path(path):
@@ -148,11 +149,11 @@ def random_string():
     return ''.join([random.choice(string.ascii_lowercase) for _ in range(6)])
 
 
-def set_guest_index(path: str, index: int):
+def set_guest_index(content: str, index: int):
     if index == None:
         return path
     else:
-        return "{}__{}".format(path, index)
+        return "{}__{}".format(content, index)
 
 
 class Recipe(object):
@@ -407,7 +408,9 @@ def deploy(arguments):
         **optionals
     )
 
-    cluster = KiKiMR(configuration)
+    sub_folder_name = set_guest_index("kikimr_configs", arguments.guest_index)
+
+    cluster = KiKiMR(configuration, sub_folder_name=sub_folder_name)
     cluster.start()
 
     info = {'nodes': {}, 'cluster': {}}
@@ -559,7 +562,7 @@ def produce_arguments(args):
     parser.add_argument("--pq-client-service-type", action='append', default=[])
     parser.add_argument("--enable-pqcd", action='store_true', default=False)
     parser.add_argument("--guest-index", action='store', default=None)
-    parser.add_argument("--dynamic_storage_pools", action='store', default=None)
+    parser.add_argument("--dynamic-storage-pools", action='store', default=None)
     parsed, _ = parser.parse_known_args(args)
     arguments = EmptyArguments()
     arguments.suppress_version_check = parsed.suppress_version_check

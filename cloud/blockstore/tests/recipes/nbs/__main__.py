@@ -1,6 +1,7 @@
 import argparse
 import grpc
 import json
+import signal
 import os
 import time
 import logging
@@ -88,7 +89,7 @@ def _start_instans(args, index):
     discovery_config = TDiscoveryServiceConfig()
     discovery_config.InstanceListFile = instance_list_file
 
-    with open(os.getenv('YDB_RECIPE_METAFILE'), 'r') as f:
+    with open(os.getenv(set_guest_index('YDB_RECIPE_METAFILE', index)), 'r') as f:
         ydb_meta = json.loads(f.read())
 
     kikimr_host = ydb_meta['nodes'][0]['host']
@@ -121,9 +122,18 @@ def _start_instans(args, index):
 
     append_recipe_err_files(ERR_LOG_FILE_NAMES_FILE, nbs.stderr_file_name)
 
-    recipe_set_env("LOCAL_KIKIMR_KIKIMR_SERVER_PORT", str(kikimr_port), nbs_index)
-    recipe_set_env("LOCAL_KIKIMR_SECURE_NBS_SERVER_PORT", str(nbs.nbs_secure_port), nbs_index)
-    recipe_set_env("LOCAL_KIKIMR_INSECURE_NBS_SERVER_PORT", str(nbs.nbs_port), nbs_index)
+    recipe_set_env("LOCAL_KIKIMR_KIKIMR_SERVER_PORT", str(kikimr_port), index)
+    recipe_set_env("LOCAL_KIKIMR_SECURE_NBS_SERVER_PORT", str(nbs.nbs_secure_port), index)
+    recipe_set_env("LOCAL_KIKIMR_INSECURE_NBS_SERVER_PORT", str(nbs.nbs_port), index)
+
+    return nbs
+
+
+def set_guest_index(content, index=0):
+    if index == 0:
+        return content
+
+    return "{}__{}".format(content, index)
 
 
 def start(argv):
@@ -138,13 +148,28 @@ def start(argv):
     else:
         args.nbs_instance_count = int(args.nbs_instance_count)
 
+    nbs_servers =[]
+
     for nbs_index in range(args.nbs_instance_count):
         logger.info("tring to start instance No {}".format(nbs_index))
-        _start_instans(args, nbs_index)
+        nbs_servers.append(_start_instans(args, nbs_index))
+
+    with open(PID_FILE_NAME, "w") as f:
+        for nbs in nbs_servers:
+            f.write(str(nbs.pid) + "\n")
+
+    for nbs in nbs_servers:
+        wait_for_nbs_server(nbs.nbs_port)
 
 
 def stop(argv):
-    return
+    with open(PID_FILE_NAME) as f:
+        for line in f:
+            pid = int(line.strip())
+            os.kill(pid, signal.SIGTERM)
+    errors = process_recipe_err_files(ERR_LOG_FILE_NAMES_FILE)
+    if errors:
+        raise RuntimeError("Errors during recipe execution:\n" + "\n".join(errors))
 
 if __name__ == "__main__":
     declare_recipe(start, stop)
