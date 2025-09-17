@@ -1,7 +1,7 @@
 [
   {
     "name": "dynamic_storage_pool:1",
-    "kind": "rot",
+    "kind": "hdd",
     "pdisk_user_kind": 0
   },
   {

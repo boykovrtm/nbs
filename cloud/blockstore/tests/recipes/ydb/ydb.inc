@@ -5,14 +5,16 @@ DEPENDS(
     cloud/blockstore/tests/recipes/ydb
 )
 
+ENV(YDB_ENABLE_PQCD="true")
+
 USE_RECIPE(
     cloud/blockstore/tests/recipes/ydb/ydb-recipe
     --use-log-files
-    --guest_index 0
+    --guest-index 0
 )
 
 USE_RECIPE(
     cloud/blockstore/tests/recipes/ydb/ydb-recipe
     --use-log-files
-    --guest_index 1
+    --guest-index 1
 )

@@ -9,18 +9,23 @@ import string
 import typing  # noqa: F401
 import sys
 from six.moves.urllib.parse import urlparse
-
-import yatest
+from google.protobuf.json_format import MessageToDict
 
 from contrib.ydb.library.yql.providers.common.proto.gateways_config_pb2 import TGenericConnectorConfig
-from contrib.ydb.tests.library.harness.kikimr_runner import KiKiMR
+from contrib.ydb.tests.library.common import yatest_common
+from contrib.ydb.tests.library.harness.kikimr_cluster import kikimr_cluster_factory
 from contrib.ydb.tests.library.harness.kikimr_config import KikimrConfigGenerator
 from contrib.ydb.tests.library.common.types import Erasure
 from contrib.ydb.tests.library.harness.daemon import Daemon
 from contrib.ydb.tests.library.harness.util import LogLevels
-from contrib.ydb.tests.library.harness.kikimr_port_allocator import KikimrFixedPortAllocator
+from contrib.ydb.tests.library.harness.kikimr_port_allocator import KikimrFixedPortAllocator, KikimrFixedNodePortAllocator
 from library.python import resource
 from library.python.testing.recipe import set_env
+
+import logging
+
+
+logger = logging.getLogger(__name__)
 
 
 class EmptyArguments(object):
@@ -43,15 +48,6 @@ class EmptyArguments(object):
         self.dynamic_storage_pools = None
 
 
-def _get_build_path(path):
-    try:
-        result = yatest.common.build_path(path)
-    except (AttributeError, yatest.common.NoRuntimeFormed):
-        result = path
-
-    return result
-
-
 def ensure_path_exists(path):
     if not os.path.isdir(path):
         os.makedirs(path)
@@ -60,6 +56,7 @@ def ensure_path_exists(path):
 
 def dynamic_storage_pools(args):
     dynamic_storage_pools = resource.find('dynamic_storage_pools')
+    logger.info("we finde resurce {}".format(dynamic_storage_pools))
     if dynamic_storage_pools is not None:
         return json.loads(dynamic_storage_pools)
     if args.dynamic_storage_pools is None:
@@ -77,9 +74,19 @@ def parse_erasure(args):
 
 
 def driver_path_packages(package_path):
-    if os.getenv('YDB_DRIVER_BINARY') is not None:
-        return os.getenv('YDB_DRIVER_BINARY')
-    return yatest.common.build_path("{}/ydbd".format(package_path))
+    return yatest_common.build_path(
+        "{}/Berkanavt/kikimr/bin/kikimr".format(
+            package_path
+        )
+    )
+
+
+def udfs_path_packages(package_path):
+    return yatest_common.build_path(
+        "{}/Berkanavt/kikimr/libs".format(
+            package_path
+        )
+    )
 
 
 def wrap_path(path):
@@ -104,7 +111,7 @@ def write_file(args, suffix, content):
         write_file_flushed(os.path.join(args.ydb_working_dir, suffix), content)
         return
 
-    write_file_flushed(os.path.join(yatest.common.output_path(suffix)), content)
+    write_file_flushed(os.path.join(yatest_common.output_path(suffix)), content)
 
     try:
         write_file_flushed(suffix, content)
@@ -117,16 +124,16 @@ def read_file(args, suffix):
         with open(os.path.join(args.ydb_working_dir, suffix), 'r') as fd:
             return fd.read()
 
-    with open(os.path.join(yatest.common.output_path(suffix)), 'r') as fd:
+    with open(os.path.join(yatest_common.output_path(suffix)), 'r') as fd:
         return fd.read()
 
 
 def read_recipe_meta_file(args):
-    return json.loads(read_file(args, 'ydb_recipe.json'))
+    return json.loads(read_file(args, set_guest_index('ydb_recipe.json', args.guest_index)))
 
 
 def write_recipe_meta_file(args, content):
-    write_file(args, 'ydb_recipe.json', json.dumps(content))
+    write_file(args, set_guest_index('ydb_recipe.json', args.guest_index), json.dumps(content))
 
 
 def write_ydb_database_file(args, content):
@@ -151,7 +158,7 @@ def random_string():
 
 def set_guest_index(content: str, index: int):
     if index == None:
-        return path
+        return content
     else:
         return "{}__{}".format(content, index)
 
@@ -168,7 +175,8 @@ class Recipe(object):
 
     def metafile_path(self):
         if self.arguments.ydb_working_dir:
-            return os.path.join(self.arguments.ydb_working_dir, self.recipe_metafile)
+            return set_guest_index(os.path.join(self.arguments.ydb_working_dir, self.recipe_metafile),
+                                   self.arguments.guest_index)
         if os.getenv(self.recipe_metafile_var) is not None:
             return os.getenv(self.recipe_metafile_var)
         return os.path.join(self.generate_data_path(), self.recipe_metafile)
@@ -203,9 +211,11 @@ class Recipe(object):
             # NOTE(gvit): that is possible in case when yatest infra is not available
             pass
 
-    def write_metafile(self, content, index):
-        self.setenv(set_guest_index(self.recipe_metafile_var, index), set_guest_index(self.metafile_path(), index))
-        return self.write(set_guest_index(self.metafile_path(), index), json.dumps(content))
+    def write_metafile(self, content):
+        self.setenv(
+            set_guest_index(self.recipe_metafile_var, self.arguments.guest_index),
+            self.metafile_path())
+        return self.write(self.metafile_path(), json.dumps(content))
 
     def write_endpoint(self, endpoint):
         self.setenv('YDB_ENDPOINT', endpoint)
@@ -231,11 +241,8 @@ class Recipe(object):
     def write_certificates_path(self, certificates_path):
         self.setenv('YDB_SSL_ROOT_CERTIFICATES_FILE', certificates_path)
 
-    def write_mon_port(self, mon_port):
-        self.setenv('YDB_MON_PORT', str(mon_port))
-
-    def read_metafile(self, index=None):
-        return json.loads(self.read(set_guest_index(self.metafile_path(), index )))
+    def read_metafile(self):
+        return json.loads(self.read(self.metafile_path()))
 
     def generate_data_path(self):
         if self.data_path is not None:
@@ -243,7 +250,7 @@ class Recipe(object):
         if self.arguments.ydb_working_dir:
             self.data_path = self.arguments.ydb_working_dir
             return self.data_path
-        self.data_path = yatest.common.output_path(self.data_path_template % random_string())
+        self.data_path = yatest_common.output_path(self.data_path_template % random_string())
         return ensure_path_exists(self.data_path)
 
 
@@ -271,12 +278,12 @@ def default_users():
     return {user: password}
 
 
+def enable_survive_restart():
+    return os.getenv('YDB_LOCAL_SURVIVE_RESTART') == 'true'
+
+
 def enable_tls():
     return os.getenv('YDB_GRPC_ENABLE_TLS') == 'true'
-
-
-def report_monitoring_info():
-    return os.getenv('YDB_REPORT_MONITORING_INFO') == 'true'
 
 
 def generic_connector_config():
@@ -335,7 +342,7 @@ def deploy(arguments):
     initialize_working_dir(arguments)
     recipe = Recipe(arguments)
 
-    if os.path.exists(recipe.metafile_path()):
+    if os.path.exists(recipe.metafile_path()) and enable_survive_restart():
         return start(arguments)
 
     if getattr(arguments, 'use_packages', None) is not None:
@@ -353,7 +360,7 @@ def deploy(arguments):
     port_allocator = None
     if getattr(arguments, 'fixed_ports', False):
         base_port_offset = getattr(arguments, 'base_port_offset', 0)
-        port_allocator = KikimrFixedPortAllocator(base_port_offset)
+        port_allocator = KikimrFixedPortAllocator(base_port_offset, [KikimrFixedNodePortAllocator(base_port_offset=base_port_offset)])
 
     optionals = {}
     if enable_tls():
@@ -370,52 +377,54 @@ def deploy(arguments):
     if 'YDB_EXPERIMENTAL_PG' in os.environ:
         optionals['pg_compatible_expirement'] = True
 
-    kafka_api_port = int(os.environ.get("YDB_KAFKA_PROXY_PORT", "0"))
-    if kafka_api_port != 0:
-        optionals['kafka_api_port'] = kafka_api_port
-
-    enabled_grpc_services = arguments.enabled_grpc_services.copy()  # type: typing.List[str]
-    if 'YDB_GRPC_SERVICES' in os.environ:
-        services = os.environ['YDB_GRPC_SERVICES'].split(",")
-        for service in services:
-            enabled_grpc_services.append(service)
-
     if dynamic_storage_pools(arguments):
-        optionals.update({'dynamic_storage_pools': dynamic_storage_pools(arguments)})
+        optionals.update({'dynamic_storage_pools': [
+            dict(name="dynamic_storage_pool:1", kind="hdd", pdisk_user_kind=0),
+            dict(name="dynamic_storage_pool:2", kind="ssd", pdisk_user_kind=0)
+        ]})
+
+    logger.info("dynamic_storage_pools: {}".format(dynamic_storage_pools(arguments)))
+
+    # configuration = KikimrConfigGenerator(
+    #     parse_erasure(arguments),
+    #     arguments.ydb_binary_path,
+    #     output_path=recipe.generate_data_path(),
+    #     pdisk_store_path=pdisk_store_path,
+    #     domain_name='Root',
+    #     pq_client_service_types=pq_client_service_types(arguments),
+    #     enable_pqcd=enable_pqcd(arguments),
+    #     load_udfs=True,
+    #     suppress_version_check=arguments.suppress_version_check,
+    #     udfs_path=arguments.ydb_udfs_dir,
+    #     additional_log_configs=additional_log_configs,
+    #     port_allocator=port_allocator,
+    #     use_in_memory_pdisks=use_in_memory_pdisks_flag(arguments.ydb_working_dir),
+    #     fq_config_path=arguments.fq_config_path,
+    #     public_http_config_path=arguments.public_http_config_path,
+    #     auth_config_path=arguments.auth_config_path,
+    #     use_log_files=not arguments.dont_use_log_files,
+    #     default_users=default_users(),
+    #     extra_feature_flags=enable_feature_flags,
+    #     extra_grpc_services=arguments.enabled_grpc_services,
+    #     generic_connector_config=generic_connector_config(),
+    #     **optionals
+    # )
 
     configuration = KikimrConfigGenerator(
-        erasure=parse_erasure(arguments),
-        binary_paths=[arguments.ydb_binary_path] if arguments.ydb_binary_path else None,
-        output_path=recipe.generate_data_path(),
-        pdisk_store_path=pdisk_store_path,
-        domain_name='local',
-        pq_client_service_types=pq_client_service_types(arguments),
-        enable_pqcd=enable_pqcd(arguments),
-        suppress_version_check=arguments.suppress_version_check,
-        udfs_path=arguments.ydb_udfs_dir or _get_build_path("yql/udfs"),
-        additional_log_configs=additional_log_configs,
-        port_allocator=port_allocator,
-        use_in_memory_pdisks=use_in_memory_pdisks_flag(arguments.ydb_working_dir),
-        fq_config_path=arguments.fq_config_path,
-        public_http_config_path=arguments.public_http_config_path,
-        auth_config_path=arguments.auth_config_path,
-        use_log_files=not arguments.dont_use_log_files,
-        default_users=default_users(),
-        extra_feature_flags=enable_feature_flags,
-        extra_grpc_services=enabled_grpc_services,
-        generic_connector_config=generic_connector_config(),
-        verbose_memory_limit_exception=True,
-        **optionals
-    )
+        erasure=None,
+        binary_path=arguments.ydb_binary_path,
+        use_in_memory_pdisks=True,
+        dynamic_storage_pools=[
+            dict(name="dynamic_storage_pool:1", kind="hdd", pdisk_user_kind=0),
+            dict(name="dynamic_storage_pool:2", kind="ssd", pdisk_user_kind=0)
+        ],
+        use_log_files=True)
 
-    sub_folder_name = set_guest_index("kikimr_configs", arguments.guest_index)
-
-    cluster = KiKiMR(configuration, sub_folder_name=sub_folder_name)
+    cluster = kikimr_cluster_factory(configuration, sub_folder_name="kikimr_congigs_{}".format(arguments.guest_index))
     cluster.start()
 
-    info = {'nodes': {}, 'cluster': {}}
+    info = {'nodes': {}, 'clusters': {}}
     endpoints = []
-    mon_port = None
     for node_id, node in cluster.nodes.items():
         info['nodes'][node_id] = {
             'pid': node.pid,
@@ -425,6 +434,7 @@ def deploy(arguments):
             'mon_port': node.mon_port,
             'command': node.command,
             'cwd': node.cwd,
+            'stdin_file': node.stdin_file_name,
             'stderr_file': node.stderr_file_name,
             'stdout_file': node.stdout_file_name,
             'pdisks': [
@@ -433,15 +443,12 @@ def deploy(arguments):
             ]
         }
 
-        if mon_port is None:
-            mon_port = node.mon_port
-
         endpoints.append("localhost:%d" % node.grpc_port)
 
     info['clusters'] = {
-        'domains_txt': configuration.domains_txt,
+        'domains_txt': MessageToDict(configuration.domains_txt),
         'binary_path': configuration.binary_path,
-        'domain_name': configuration.domain_name
+    #     'domain_name': configuration.domain_name
     }
     endpoint = endpoints[0]
     database = cluster.domain_name
@@ -449,8 +456,6 @@ def deploy(arguments):
     recipe.write_endpoint(endpoint)
     recipe.write_database(cluster.domain_name)
     recipe.write_connection_string(("grpcs://" if enable_tls() else "grpc://") + endpoint + "?database=/" + cluster.domain_name)
-    if report_monitoring_info():
-        recipe.write_mon_port(mon_port)
     if enable_tls():
         recipe.write_certificates_path(configuration.grpc_tls_ca.decode("utf-8"))
     return endpoint, database
@@ -517,6 +522,7 @@ def start(arguments):
         files = {}
         if node_meta['stderr_file'] is not None and os.path.exists(node_meta['stderr_file']):
             files = {
+                'stdin_file': node_meta['stdin_file'],
                 'stderr_file': node_meta['stderr_file'],
                 'stdout_file': node_meta['stdout_file'],
             }
@@ -560,9 +566,10 @@ def produce_arguments(args):
     parser.add_argument("--fixed-ports", action='store_true', default=False)
     parser.add_argument("--base-port-offset", action="store", type=int, default=0)
     parser.add_argument("--pq-client-service-type", action='append', default=[])
+    parser.add_argument("--enable-datastreams", action='store_true', default=False)
     parser.add_argument("--enable-pqcd", action='store_true', default=False)
     parser.add_argument("--guest-index", action='store', default=None)
-    parser.add_argument("--dynamic-storage-pools", action='store', default=None)
+    parser.add_argument("--dynamic_storage_pools", action='store', default=None)
     parsed, _ = parser.parse_known_args(args)
     arguments = EmptyArguments()
     arguments.suppress_version_check = parsed.suppress_version_check
@@ -575,8 +582,9 @@ def produce_arguments(args):
         arguments.debug_logging = parsed.debug_logging
     arguments.enable_pq = parsed.enable_pq
     arguments.pq_client_service_types = parsed.pq_client_service_type
+    arguments.enable_datastreams = parsed.enable_datastreams
     arguments.enable_pqcd = parsed.enable_pqcd
-    if parsed.guest_index == "$GUEST_INDEX":
+    if parsed.guest_index == "$GUEST_INDEX":    # check befor commit
         arguments.guest_index = None
     else:
         arguments.guest_index = parsed.guest_index

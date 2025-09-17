@@ -11,16 +11,20 @@ from library.python.testing.recipe import declare_recipe, set_env
 from cloud.blockstore.config.server_pb2 import TServerConfig, TServerAppConfig, TKikimrServiceConfig
 from cloud.blockstore.config.discovery_pb2 import TDiscoveryServiceConfig
 
+from google.protobuf.json_format import ParseDict
+
 from cloud.blockstore.tests.python.lib.nbs_runner import LocalNbs
 from cloud.blockstore.tests.python.lib.test_base import thread_count, wait_for_nbs_server, recipe_set_env
 
 import contrib.ydb.core.protos.grpc_pb2_grpc as grpc_server
+from contrib.ydb.core.protos import config_pb2
 from cloud.storage.core.tests.common import (
     append_recipe_err_files,
     process_recipe_err_files,
 )
 
 import yatest.common as yatest_common
+
 
 PID_FILE_NAME = "local_kikimr_nbs_server_recipe.pid"
 ERR_LOG_FILE_NAMES_FILE = "local_kikimr_nbs_server_recipe.err_log_files"
@@ -92,10 +96,14 @@ def _start_instans(args, index):
     with open(os.getenv(set_guest_index('YDB_RECIPE_METAFILE', index)), 'r') as f:
         ydb_meta = json.loads(f.read())
 
-    kikimr_host = ydb_meta['nodes'][0]['host']
-    kikimr_port = ydb_meta['nodes'][0]['grpc_port']
+    kikimr_host = list(ydb_meta['nodes'].values())[0]['host']
+    kikimr_port = list(ydb_meta['nodes'].values())[0]['grpc_port']
     kikimr_binary_path = ydb_meta['clusters']['binary_path']
-    domains_txt = ydb_meta['clusters']['domains_txt']
+    config = config_pb2.TAppConfig()
+    ParseDict(ydb_meta['clusters']['domains_txt'], config.DomainsConfig)
+    domains_txt = config.DomainsConfig
+
+    logger.info("meta file has: host {}, port {}, path {}, domains txt {}".format(kikimr_host, kikimr_port, kikimr_binary_path, domains_txt))
 
     nbs = LocalNbs(
         grpc_port=kikimr_port,
@@ -129,8 +137,8 @@ def _start_instans(args, index):
     return nbs
 
 
-def set_guest_index(content, index=0):
-    if index == 0:
+def set_guest_index(content, index=None):
+    if index == None:
         return content
 
     return "{}__{}".format(content, index)
@@ -147,6 +155,7 @@ def start(argv):
         args.nbs_instance_count = 1
     else:
         args.nbs_instance_count = int(args.nbs_instance_count)
+    set_env("CLUSTERS_COUNT", args.nbs_instance_count)
 
     nbs_servers =[]
 

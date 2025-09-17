@@ -54,13 +54,12 @@ def start(argv):
         )
 
     pm = yatest_common.network.PortManager()
-    clusters = []
     nbs_servers = []
 
     nbs_instances_count = args.nbs_instances_count
     set_env("CLUSTERS_COUNT", str(nbs_instances_count))
 
-    logger.info("tring to start {} instances".format(nbs_instances_count))
+    logger.info("trying to start {} instance".format(nbs_instances_count))
 
     for nbs_index in range(nbs_instances_count):
         logger.info("starting instans No {}".format(nbs_index))
@@ -76,7 +75,6 @@ def start(argv):
 
         kikimr_cluster = kikimr_cluster_factory(configurator=configurator, sub_folder_name="kikimr_configs_{}".format(nbs_index))
         kikimr_cluster.start()
-        clusters.append((configurator, kikimr_cluster))
 
         server_app_config = TServerAppConfig()
         server_app_config.ServerConfig.CopyFrom(TServerConfig())

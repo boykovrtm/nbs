@@ -9,6 +9,7 @@ import tempfile
 import six
 import yaml
 from google.protobuf.text_format import Parse
+
 from pkg_resources import resource_string
 
 import contrib.ydb.tests.library.common.yatest_common as yatest_common
@@ -43,6 +44,8 @@ def get_fqdn():
     assert False, 'Failed to get FQDN'
 
 
+from pkg_resources import resource_string
+# GRPC_SERVER:DEBUG,TICKET_PARSER:WARN,KQP_COMPILE_ACTOR:DEBUG
 def get_additional_log_configs():
     log_configs = os.getenv('YDB_ADDITIONAL_LOG_CONFIGS', '')
     rt = {}
@@ -82,6 +85,8 @@ def load_default_yaml(default_tablet_node_ids, ydb_domain_name, static_erasure, 
     yaml_dict["log_config"]["entry"] = []
     for log, level in six.iteritems(log_configs):
         yaml_dict["log_config"]["entry"].append({"component": log, "level": int(level)})
+    if os.getenv("YDB_ENABLE_COLUMN_TABLES", "") == "true":
+        yaml_dict |= {"column_shard_config": {"disabled_on_scheme_shard": False}}
     return yaml_dict
 
 
@@ -159,7 +164,10 @@ class KikimrConfigGenerator(object):
             hive_config=None,
             datashard_config=None,
             enforce_user_token_requirement=False,
-            default_user_sid=None
+            default_user_sid=None,
+            pg_compatible_expirement=False,
+            generic_connector_config=None,  # typing.Optional[TGenericConnectorConfig]
+            pgwire_port=None,
     ):
         if extra_feature_flags is None:
             extra_feature_flags = []
@@ -220,6 +228,11 @@ class KikimrConfigGenerator(object):
 
         self.__additional_log_configs = {} if additional_log_configs is None else additional_log_configs
         self.__additional_log_configs.update(get_additional_log_configs())
+        if pg_compatible_expirement:
+            self.__additional_log_configs.update({
+                'PGWIRE': LogLevels.from_string('DEBUG'),
+                'LOCAL_PGWIRE': LogLevels.from_string('DEBUG'),
+            })
 
         self.dynamic_pdisk_size = dynamic_pdisk_size
         self.dynamic_storage_pools = dynamic_storage_pools
@@ -250,6 +263,10 @@ class KikimrConfigGenerator(object):
         if os.getenv('PGWIRE_LISTENING_PORT', ''):
             self.yaml_config["local_pg_wire_config"] = {}
             self.yaml_config["local_pg_wire_config"]["listening_port"] = os.getenv('PGWIRE_LISTENING_PORT')
+
+        if pgwire_port:
+            self.yaml_config["local_pg_wire_config"] = {}
+            self.yaml_config["local_pg_wire_config"]["listening_port"] = pgwire_port
 
         if disable_iterator_reads:
             self.yaml_config["table_service_config"]["enable_kqp_scan_query_source_read"] = False
@@ -375,6 +392,45 @@ class KikimrConfigGenerator(object):
 
         if default_user_sid:
             self.yaml_config["domains_config"]["security_config"]["default_user_sids"] = [default_user_sid]
+
+        if pg_compatible_expirement:
+            self.yaml_config["table_service_config"]["enable_prepared_ddl"] = True
+            self.yaml_config["table_service_config"]["enable_ast_cache"] = True
+            self.yaml_config["table_service_config"]["index_auto_choose_mode"] = 'max_used_prefix'
+            self.yaml_config["feature_flags"]['enable_temp_tables'] = True
+            self.yaml_config["feature_flags"]['enable_table_pg_types'] = True
+            self.yaml_config['feature_flags']['enable_pg_syntax'] = True
+            self.yaml_config['feature_flags']['enable_uniq_constraint'] = True
+
+            # https://github.com/ydb-platform/ydb/issues/5152
+            # self.yaml_config["table_service_config"]["enable_pg_consts_to_params"] = True
+
+        if generic_connector_config:
+            if "query_service_config" not in self.yaml_config:
+                self.yaml_config["query_service_config"] = {}
+
+            self.yaml_config["query_service_config"]["generic"] = {
+                "connector": {
+                    "endpoint": {
+                        "host": generic_connector_config.Endpoint.host,
+                        "port": generic_connector_config.Endpoint.port,
+                    },
+                    "use_ssl": generic_connector_config.UseSsl
+                },
+                "default_settings": [
+                    {
+                        "name": "DateTimeFormat",
+                        "value": "string"
+                    },
+                    {
+                        "name": "UsePredicatePushdown",
+                        "value": "true"
+                    }
+                ]
+            }
+
+            self.yaml_config["feature_flags"]["enable_external_data_sources"] = True
+            self.yaml_config["feature_flags"]["enable_script_execution_operations"] = True
 
     @property
     def pdisks_info(self):

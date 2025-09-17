@@ -10,4 +10,5 @@ DATA(
 
 USE_RECIPE(
     cloud/blockstore/tests/recipes/nbs/nbs-recipe
+    --nbs-instance-count $NBS_INSTANCE_COUNT
 )

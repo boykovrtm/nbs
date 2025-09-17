@@ -11,6 +11,8 @@ TAG(ya:manual)
 SET(NBS_INSTANCES_COUNT 2)
 SET(VIRTIOFS_SERVER_COUNT 2)
 
+RESOURCE(cloud/blockstore/tests/fio/qemu-vhost-two-kikimrs-test/dynamic_storage_pools.json dynamic_storage_pools)
+
 DEPENDS(
     cloud/storage/core/tools/testing/fio/bin
 )
