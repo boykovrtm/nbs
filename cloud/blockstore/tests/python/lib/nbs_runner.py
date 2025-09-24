@@ -161,13 +161,20 @@ class LocalNbs(Daemon):
             self.__use_cells = False
 
         root_kms_port = os.environ.get("FAKE_ROOT_KMS_PORT")
+        logger.info("root_kms_port: {}".format(root_kms_port))
         if root_kms_port is not None:
             root_kms = TRootKmsConfig()
             root_kms.Address = f'localhost:{root_kms_port}'
             root_kms.KeyId = 'nbs'
             root_kms.RootCertsFile = os.environ.get("FAKE_ROOT_KMS_CA")
+            logger.info("FAKE_ROOT_KMS_CA: {}".format(os.environ.get("FAKE_ROOT_KMS_CA")))
+
             root_kms.CertChainFile = os.environ.get("FAKE_ROOT_KMS_CLIENT_CRT")
+            logger.info("FAKE_ROOT_KMS_CLIENT_CRT: {}".format(os.environ.get("FAKE_ROOT_KMS_CLIENT_CRT")))
+
             root_kms.PrivateKeyFile = os.environ.get("FAKE_ROOT_KMS_CLIENT_KEY")
+            logger.info("FAKE_ROOT_KMS_CLIENT_KEY: {}".format(os.environ.get("FAKE_ROOT_KMS_CLIENT_KEY")))
+
             self.__proto_configs['root-kms.txt'] = root_kms
 
         self.__access_service = None
@@ -256,8 +263,11 @@ ModifyScheme {
         ]
 
         logger.info("Init scheme {}".format(command))
+        logger.info("cwd: {}".format(self.__cwd))
+        logger.info("kikimr_binary_path {}".format(self.__kikimr_binary_path))
         with open(self.__cwd + "/ydbd_output.log", "w") as ydbd_output:
             subprocess.check_call(command, stdout=ydbd_output, stderr=ydbd_output)
+        logger.info("is everything ok?")
 
     @property
     def nbs_port(self):

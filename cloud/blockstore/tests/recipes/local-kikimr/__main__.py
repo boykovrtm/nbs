@@ -102,7 +102,6 @@ def start(argv):
         )
 
     pm = yatest_common.network.PortManager()
-    clusters = []
     nbs_servers = []
 
     nbs_index = int(args.nbs_index)
@@ -119,7 +118,6 @@ def start(argv):
 
     kikimr_cluster = kikimr_cluster_factory(configurator=configurator, sub_folder_name="kikimr_configs_{}".format(nbs_index))
     kikimr_cluster.start()
-    clusters.append((configurator, kikimr_cluster))
 
     server_app_config = TServerAppConfig()
     server_app_config.ServerConfig.CopyFrom(TServerConfig())
@@ -151,6 +149,11 @@ def start(argv):
     cells_config = create_cells_config(args, cells_config_file, nbs_port, nbs_secure_port)
 
     kikimr_port = list(kikimr_cluster.nodes.values())[0].port
+
+    logger.info("grpc_port: {}, domain_txt: {}, server_app_config: {}, discovery_config: {}, nbs_secure_port: {}, nbs_port: {}, kikimr_binary_path: {}, nbs_binary_path: {}, use_ic_version_check: {}".format(
+        kikimr_port, configurator.domains_txt, server_app_config, discovery_config, nbs_secure_port, nbs_port, kikimr_binary_path, nbs_binary_path, args.use_ic_version_check
+    ))
+
     nbs = LocalNbs(
         kikimr_port,
         configurator.domains_txt,

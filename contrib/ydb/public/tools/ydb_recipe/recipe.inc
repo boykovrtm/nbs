@@ -6,5 +6,7 @@ DEPENDS(
 )
 
 USE_RECIPE(
-    contrib/ydb/public/tools/ydb_recipe/ydb_recipe --suppress-version-check
+    contrib/ydb/public/tools/ydb_recipe/ydb_recipe
+    --suppress-version-check
+    --guest-index $GUEST_INDEX
 )

@@ -9,6 +9,8 @@ import string
 import typing  # noqa: F401
 import sys
 
+from google.protobuf.json_format import MessageToDict
+
 from contrib.ydb.tests.library.common import yatest_common
 from contrib.ydb.tests.library.harness.kikimr_cluster import kikimr_cluster_factory
 from contrib.ydb.tests.library.harness.kikimr_config import KikimrConfigGenerator
@@ -17,6 +19,11 @@ from contrib.ydb.tests.library.harness.daemon import Daemon
 from contrib.ydb.tests.library.harness.util import LogLevels
 from contrib.ydb.tests.library.harness.kikimr_port_allocator import KikimrFixedPortAllocator, KikimrFixedNodePortAllocator
 from library.python.testing.recipe import set_env
+
+import logging
+
+
+logger = logging.getLogger(__name__)
 
 
 class EmptyArguments(object):
@@ -35,12 +42,32 @@ class EmptyArguments(object):
         self.dont_use_log_files = False
         self.enabled_feature_flags = []
         self.enabled_grpc_services = []
+        self.dynamic_storage_pools = None
+        self.guest_index = None
+        self.domain_name = None
 
 
 def ensure_path_exists(path):
     if not os.path.isdir(path):
         os.makedirs(path)
     return path
+
+
+def dynamic_storage_pools(args):
+    file_path = yatest_common.source_path(os.getenv('DYNAMIC_STORAGE_POOLS_FILE'))
+    logger.info('huy {}'.format(os.getenv('DYNAMIC_STORAGE_POOLS_FILE')))
+    logger.info("file path for storage pools {}".format(file_path))
+    logger.info("is there path {}".format(os.path.exists(file_path)))
+    logger.info("is  path {}".format(file_path and True))
+    if os.path.exists(file_path):
+        with open(file_path, 'r') as f:
+            dynamic_storage_pools = json.loads(f.read())
+        logger.info("we finde pools {}".format(dynamic_storage_pools))
+        return dynamic_storage_pools
+
+    if args.dynamic_storage_pools is None:
+        return None
+    return json.loads(args.dynamic_storage_pools)
 
 
 def parse_erasure(args):
@@ -135,6 +162,13 @@ def random_string():
     return ''.join([random.choice(string.ascii_lowercase) for _ in range(6)])
 
 
+def set_guest_index(content: str, index: int):
+    if index == 0:
+        return content
+    else:
+        return "{}__{}".format(content, index)
+
+
 class Recipe(object):
     def __init__(self, arguments):
         self.recipe_metafile = 'ydb_recipe.json'
@@ -183,7 +217,9 @@ class Recipe(object):
             pass
 
     def write_metafile(self, content):
-        self.setenv(self.recipe_metafile_var, self.metafile_path())
+        self.setenv(
+            set_guest_index(self.recipe_metafile_var, self.arguments.guest_index),
+            self.metafile_path())
         return self.write(self.metafile_path(), json.dumps(content))
 
     def write_endpoint(self, endpoint):
@@ -306,6 +342,9 @@ def deploy(arguments):
     if enable_tls():
         optionals.update({'grpc_tls_data_path': grpc_tls_data_path(arguments)})
         optionals.update({'grpc_ssl_enable': enable_tls()})
+    if dynamic_storage_pools(arguments):
+        optionals.update({'dynamic_storage_pools': dynamic_storage_pools(arguments)})
+
     pdisk_store_path = arguments.ydb_working_dir if arguments.ydb_working_dir else None
 
     enable_feature_flags = arguments.enabled_feature_flags.copy()  # type: typing.List[str]
@@ -319,7 +358,7 @@ def deploy(arguments):
         arguments.ydb_binary_path,
         output_path=recipe.generate_data_path(),
         pdisk_store_path=pdisk_store_path,
-        domain_name='local',
+        domain_name=arguments.domain_name,
         pq_client_service_types=pq_client_service_types(arguments),
         enable_pqcd=enable_pqcd(arguments),
         load_udfs=True,
@@ -338,10 +377,14 @@ def deploy(arguments):
         **optionals
     )
 
-    cluster = kikimr_cluster_factory(configuration)
+    sub_folder_name = None
+    if arguments.guest_index:
+        sub_folder_name = set_guest_index('kikimr_configurations', arguments.guest_index)
+
+    cluster = kikimr_cluster_factory(configuration, sub_folder_name=sub_folder_name)
     cluster.start()
 
-    info = {'nodes': {}}
+    info = {'nodes': {}, 'clusters': {}}
     endpoints = []
     for node_id, node in cluster.nodes.items():
         info['nodes'][node_id] = {
@@ -362,6 +405,13 @@ def deploy(arguments):
         }
 
         endpoints.append("localhost:%d" % node.grpc_port)
+
+    info['clusters'] = {
+        'domains_txt': MessageToDict(configuration.domains_txt),
+        'binary_path': configuration.binary_path,
+    }
+
+    logger.info("domain_txt {}".format(configuration.domains_txt))
 
     endpoint = endpoints[0]
     database = cluster.domain_name
@@ -480,6 +530,9 @@ def produce_arguments(args):
     parser.add_argument("--pq-client-service-type", action='append', default=[])
     parser.add_argument("--enable-datastreams", action='store_true', default=False)
     parser.add_argument("--enable-pqcd", action='store_true', default=False)
+    parser.add_argument("--guest-index", action='store', default=None)
+    parser.add_argument("--dynamic-storage-pools", action='store', default=None)
+    parser.add_argument("--domain-name", action="store", default='local')
     parsed, _ = parser.parse_known_args(args)
     arguments = EmptyArguments()
     arguments.suppress_version_check = parsed.suppress_version_check
@@ -493,6 +546,12 @@ def produce_arguments(args):
     arguments.pq_client_service_types = parsed.pq_client_service_type
     arguments.enable_datastreams = parsed.enable_datastreams
     arguments.enable_pqcd = parsed.enable_pqcd
+    if parsed.guest_index == "$GUEST_INDEX":    # check befor commit
+        arguments.guest_index = 0
+    else:
+        arguments.guest_index = parsed.guest_index
+    if parsed.domain_name is not None:
+        arguments.domain_name = parsed.domain_name
     return arguments
 
 
